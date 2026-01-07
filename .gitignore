@@ -10,6 +10,8 @@
 /[Bb]uilds/
 /[Ll]ogs/
 /[Uu]ser[Ss]ettings/
+[Mm]emoryCaptures/
+
 *.log
 
 # MemoryCaptures can get excessive in size.
@@ -27,7 +29,9 @@
 
 # Visual Studio cache directory
 .vs/
-
+.vscode/
+.DS_Store
+Thumbs.db
 # Gradle cache directory
 .gradle/
 
@@ -73,3 +77,5 @@ crashlytics-build.properties
 # Temporary auto-generated Android Assets
 /[Aa]ssets/[Ss]treamingAssets/aa.meta
 /[Aa]ssets/[Ss]treamingAssets/aa/*
+
+
