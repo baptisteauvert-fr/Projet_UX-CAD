@@ -13,119 +13,103 @@ public class RadialMenu : MonoBehaviour
     [SerializeField] private List<RadialOption> options = new();
 
     [Header("Input")]
-    [SerializeField] private InputActionProperty openMenuAction;    // B
-    [SerializeField] private InputActionProperty thumbstickAction;  // Joystick
+    [SerializeField] private InputActionProperty openMenuAction; // B (ton binding local)
+
+    [Header("Hand selection")]
+    [Tooltip("Transform qui représente la main (ou un empty devant la main)")]
+    [SerializeField] private Transform handPointer;
+
+    [Tooltip("Distance minimum main->centre pour valider une slice (évite les sélections quand on est au centre)")]
+    [SerializeField] private float minRadiusMeters = 0.06f;
+
+    [Tooltip("Décalage du menu à l'ouverture (devant la main)")]
+    [SerializeField] private float spawnDistance = 0.25f;
+
+    [Tooltip("Le menu regarde la caméra à l'ouverture")]
+    [SerializeField] private bool faceCameraOnOpen = true;
 
     [Header("Target")]
     [SerializeField] private Renderer targetRenderer;
 
-    [Header("Selection")]
-    [SerializeField] private float deadZone = 0.35f;
+    [Tooltip("Décalage d'angle si tes slices ne sont pas alignées (ex: 0, 90, 180...)")]
+    [SerializeField] private float startAngleOffsetDeg = 0f;
 
-    [Header("Debug")]
-    [SerializeField] private bool debugLogs = true;
-    [SerializeField] private float logEverySecondsWhilePressed = 0.5f;
+    [Tooltip("Debug: dessine une ligne centre->main dans la Scene")]
+    [SerializeField] private bool debugDraw = true;
+
 
     private readonly List<RadialSliceUI> spawned = new();
     private bool isOpen;
     private int currentIndex = -1;
 
-    private float _nextSpamLogTime;
+    // “position fixe” pendant l’ouverture
+    private Vector3 openPos;
+    private Quaternion openRot;
 
     private void Awake()
     {
         if (menuCanvas == null)
             menuCanvas = GetComponentInChildren<Canvas>(true);
 
-        if (debugLogs)
-        {
-            Debug.Log($"[RadialMenu] Awake on {name}", this);
-            Debug.Log($"[RadialMenu] openMenuAction has action? {(openMenuAction.action != null)}", this);
-            Debug.Log($"[RadialMenu] thumbstickAction has action? {(thumbstickAction.action != null)}", this);
-        }
-
         BuildMenu();
         SetOpen(false);
     }
 
-    private void OnEnable()
-    {
-        if (openMenuAction.action != null) openMenuAction.action.Enable();
-        if (thumbstickAction.action != null) thumbstickAction.action.Enable();
-
-        if (debugLogs)
-        {
-            Debug.Log($"[RadialMenu] OnEnable | open enabled={openMenuAction.action?.enabled} | thumb enabled={thumbstickAction.action?.enabled}", this);
-            Debug.Log($"[RadialMenu] Open action name={openMenuAction.action?.name} | bindings={openMenuAction.action?.bindings.Count}", this);
-            Debug.Log($"[RadialMenu] Thumb action name={thumbstickAction.action?.name} | bindings={thumbstickAction.action?.bindings.Count}", this);
-        }
-
-        // BONUS: logs événementiels (super utile)
-        if (openMenuAction.action != null)
-        {
-            openMenuAction.action.performed += OnOpenPerformed;
-            openMenuAction.action.canceled += OnOpenCanceled;
-        }
-    }
-
-    private void OnDisable()
-    {
-        if (openMenuAction.action != null)
-        {
-            openMenuAction.action.performed -= OnOpenPerformed;
-            openMenuAction.action.canceled -= OnOpenCanceled;
-        }
-
-        if (openMenuAction.action != null) openMenuAction.action.Disable();
-        if (thumbstickAction.action != null) thumbstickAction.action.Disable();
-    }
-
-    private void OnOpenPerformed(InputAction.CallbackContext ctx)
-    {
-        if (!debugLogs) return;
-        Debug.Log($"[RadialMenu] OPEN performed! phase={ctx.phase} time={Time.time:F2}", this);
-    }
-
-    private void OnOpenCanceled(InputAction.CallbackContext ctx)
-    {
-        if (!debugLogs) return;
-        Debug.Log($"[RadialMenu] OPEN canceled! phase={ctx.phase} time={Time.time:F2}", this);
-    }
+    private void OnEnable() => openMenuAction.action?.Enable();
+    private void OnDisable() => openMenuAction.action?.Disable();
 
     private void Update()
     {
-        if (openMenuAction.action == null)
-        {
-            if (debugLogs) Debug.LogWarning("[RadialMenu] openMenuAction.action is NULL (pas assigné).", this);
-            enabled = false;
-            return;
-        }
+        if (openMenuAction.action == null) return;
 
         bool pressed = openMenuAction.action.IsPressed();
 
-        // Log "spam" léger pour confirmer que IsPressed change bien
-        if (debugLogs && pressed && Time.time >= _nextSpamLogTime)
-        {
-            _nextSpamLogTime = Time.time + logEverySecondsWhilePressed;
-            Debug.Log($"[RadialMenu] IsPressed = TRUE (B maintenu) time={Time.time:F2}", this);
-        }
-
         if (pressed && !isOpen)
         {
-            if (debugLogs) Debug.Log("[RadialMenu] -> SetOpen(TRUE)", this);
+            PlaceMenuOnce();
             SetOpen(true);
         }
         else if (!pressed && isOpen)
         {
-            if (debugLogs) Debug.Log("[RadialMenu] -> ApplySelection + SetOpen(FALSE)", this);
             ApplySelection();
             SetOpen(false);
         }
 
         if (!isOpen) return;
 
-        UpdateSelectionFromThumbstick();
+        UpdateSelectionFromHand();
         UpdateHighlight();
+    }
+
+    private void PlaceMenuOnce()
+    {
+        // Menu fixe : on pose UNE fois, puis on ne bouge plus tant que c’est ouvert
+        if (handPointer != null)
+        {
+            var cam = Camera.main;
+            Vector3 forward = cam != null ? cam.transform.forward : handPointer.forward;
+
+            openPos = handPointer.position + forward.normalized * spawnDistance;
+
+            if (faceCameraOnOpen && cam != null)
+            {
+                // le menu fait face à la caméra
+                Vector3 dir = (openPos - cam.transform.position);
+                openRot = Quaternion.LookRotation(dir.normalized, Vector3.up);
+            }
+            else
+            {
+                openRot = transform.rotation;
+            }
+        }
+        else
+        {
+            openPos = transform.position;
+            openRot = transform.rotation;
+        }
+
+        transform.position = openPos;
+        transform.rotation = openRot;
     }
 
     private void BuildMenu()
@@ -134,12 +118,7 @@ public class RadialMenu : MonoBehaviour
             if (s != null) Destroy(s.gameObject);
         spawned.Clear();
 
-        if (slicePrefab == null || slicesRoot == null || options.Count == 0)
-        {
-            if (debugLogs)
-                Debug.LogWarning($"[RadialMenu] BuildMenu skipped. slicePrefab? {slicePrefab != null}, slicesRoot? {slicesRoot != null}, options={options.Count}", this);
-            return;
-        }
+        if (slicePrefab == null || slicesRoot == null || options.Count == 0) return;
 
         float fill = 1f / options.Count;
         float degreesPer = 360f / options.Count;
@@ -151,39 +130,70 @@ public class RadialMenu : MonoBehaviour
             slice.Setup(options[i], i, fill, rotation);
             spawned.Add(slice);
         }
-
-        if (debugLogs) Debug.Log($"[RadialMenu] BuildMenu OK. spawned={spawned.Count}", this);
     }
 
     private void SetOpen(bool open)
     {
         isOpen = open;
+        if (menuCanvas != null) menuCanvas.enabled = open;
 
-        if (menuCanvas != null)
-            menuCanvas.enabled = open;
-
-        if (debugLogs)
-            Debug.Log($"[RadialMenu] Canvas enabled = {menuCanvas != null && menuCanvas.enabled}", this);
-
-        if (!open) currentIndex = -1;
+        if (!open)
+        {
+            currentIndex = -1;
+            UpdateHighlight();
+        }
     }
 
-    private void UpdateSelectionFromThumbstick()
+    private void OnDrawGizmos()
     {
-        if (thumbstickAction.action == null) return;
+        if (!debugDraw || menuCanvas == null || handPointer == null) return;
 
-        Vector2 v = thumbstickAction.action.ReadValue<Vector2>();
-        if (debugLogs)
-            Debug.Log($"[RadialMenu] Thumbstick = {v}", this);
+        Gizmos.color = Color.yellow;
+        Gizmos.DrawLine(menuCanvas.transform.position, handPointer.position);
+        Gizmos.DrawSphere(handPointer.position, 0.01f);
+    }
 
-        if (v.magnitude < deadZone) { currentIndex = -1; return; }
 
-        float angle = Mathf.Atan2(v.y, v.x) * Mathf.Rad2Deg;
+    private void UpdateSelectionFromHand()
+    {
+        if (handPointer == null || options.Count == 0 || menuCanvas == null)
+        {
+            currentIndex = -1;
+            return;
+        }
+
+        // Centre du menu (prends slicesRoot si c’est bien au centre du disque)
+        Transform centerT = slicesRoot != null ? slicesRoot : menuCanvas.transform;
+
+        Vector3 center = centerT.position;
+        Vector3 delta = handPointer.position - center;
+
+        // Projection sur le plan du menu
+        Vector3 right = menuCanvas.transform.right;
+        Vector3 up = menuCanvas.transform.up;
+
+        float x = Vector3.Dot(delta, right);
+        float y = Vector3.Dot(delta, up);
+
+        Vector2 p = new Vector2(x, y);
+
+        if (p.magnitude < minRadiusMeters)
+        {
+            currentIndex = -1;
+            return;
+        }
+
+        float angle = Mathf.Atan2(p.y, p.x) * Mathf.Rad2Deg;
         if (angle < 0f) angle += 360f;
 
         float sliceSize = 360f / options.Count;
-        currentIndex = Mathf.Clamp(Mathf.FloorToInt(angle / sliceSize), 0, options.Count - 1);
+        angle = (angle + startAngleOffsetDeg) % 360f;
+
+        int idx = Mathf.FloorToInt((angle + sliceSize * 0.5f) / sliceSize) % options.Count;
+        currentIndex = idx;
     }
+
+
 
     private void UpdateHighlight()
     {
@@ -196,10 +206,6 @@ public class RadialMenu : MonoBehaviour
         if (currentIndex < 0 || currentIndex >= options.Count) return;
         if (targetRenderer == null) return;
 
-        var c = options[currentIndex].color;
-        targetRenderer.material.color = c;
-
-        if (debugLogs)
-            Debug.Log($"[RadialMenu] ApplySelection index={currentIndex} color={c}", this);
+        targetRenderer.material.color = options[currentIndex].color;
     }
 }
